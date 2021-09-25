@@ -9,20 +9,29 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Extensions;
 using System.Collections.Generic;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.OpenApi.Models;
+using Microsoft.AspNetCore.Mvc;
+using System.Text.Json.Serialization;
+using System.Text.Json;
+
+ConcurrentDictionary<string, TenantInfo> info = new();
 
 var builder = WebApplication.CreateBuilder();
-builder.Services.AddSwaggerGen(swagger => swagger.SwaggerDoc("v1", new OpenApiInfo { Title = "Emul API" }));
-builder.Services.AddControllers().AddNewtonsoftJson();
+builder.Services.AddEndpointsApiExplorer().AddSwaggerGen();
 var app = builder.Build();
-app.UseRouting().UseEndpoints(endpoints => endpoints.MapControllers());
-app.UseSwagger().UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "My API V1"));
+app.UseSwagger().UseSwaggerUI();
 
-app.Map("/{tenant:regex(^(?!.*swagger).*$)}/{*path:regex(^(?!.*config).*$)}", async context =>
+app.MapGet("{tenant}/config",(string tenant) => Results.Json(GetCurrentTenant(tenant).Funcs.Values, new JsonSerializerOptions
+{
+    WriteIndented = true,
+}));
+app.MapPost("{tenant}/config/emu", ([FromBody] MethodInfo value, string tenant) => MapMethod(tenant, value));
+app.MapPost("{tenant}/config/proxy", ([FromBody] ProxyInfo value, string tenant) => MapMethod(tenant, value));
+app.MapDelete("{tenant}/config", (string tenant) => GetCurrentTenant(tenant).Funcs.Clear());
+app.Map("/{tenant}/{*path}", async context =>
 {
     var path = context.Request.RouteValues["path"] + "";
-    var tenant = ConfigController.GetCurrentTenant(context.Request.RouteValues["tenant"] + "");
-    if (tenant.Funcs.TryGetValue(path + context.Request.Method.ToUpper(), out RecInfo method) || tenant.Funcs.TryGetValue(path, out method))
+    var tenant = GetCurrentTenant(context.Request.RouteValues["tenant"] + "");
+    if (tenant.Funcs.TryGetValue(path + context.Request.Method.ToUpper(), out object method) || tenant.Funcs.TryGetValue(path, out method))
     {
         switch (method)
         {
@@ -62,7 +71,15 @@ app.Map("/{tenant:regex(^(?!.*swagger).*$)}/{*path:regex(^(?!.*config).*$)}", as
 
 await app.RunAsync();
 
-public record TenantInfo(ConcurrentDictionary<string, RecInfo> Funcs);
-public record RecInfo([property: Newtonsoft.Json.JsonIgnore] string Id, string Name);
+TenantInfo GetCurrentTenant(string tenant) => info.GetOrAdd(tenant, (t) => new TenantInfo(new ConcurrentDictionary<string, object>()));
+
+void MapMethod(string tenant, RecInfo res)
+{
+    if (res.Name is not null && res.Name != "config" && !res.Name.StartsWith("config/"))
+        GetCurrentTenant(tenant).Funcs.AddOrUpdate(res.Id, res, (s, d) => res);
+}
+
+public record TenantInfo(ConcurrentDictionary<string, object> Funcs);
+public record RecInfo([property: JsonIgnore] string Id, string Name);
 public record MethodInfo(string Name, string Method, int Status, string Response, Dictionary<string, string> Headers) : RecInfo(Name + Method?.ToUpper(), Name);
 public record ProxyInfo(string Name, string MapUrl, string ProxyUrl, string ProxyLogin, string ProxyPassword) : RecInfo(Name, Name);
