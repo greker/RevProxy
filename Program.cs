@@ -24,10 +24,10 @@ app.MapGet("{tenant}/config",(string tenant) => Results.Json(GetCurrentTenant(te
 {
     WriteIndented = true,
 }));
-app.MapPost("{tenant}/config/emu", ([FromBody] MethodInfo value, string tenant) => MapMethod(tenant, value));
-app.MapPost("{tenant}/config/proxy", ([FromBody] ProxyInfo value, string tenant) => MapMethod(tenant, value));
-app.MapDelete("{tenant}/config", (string tenant) => GetCurrentTenant(tenant).Funcs.Clear());
-app.Map("/{tenant}/{*path}", async context =>
+app.MapPost("config/emu/{tenant}", ([FromBody] MethodInfo value, string tenant) => MapMethod(tenant, value));
+app.MapPost("config/proxy/{tenant}", ([FromBody] ProxyInfo value, string tenant) => MapMethod(tenant, value));
+app.MapDelete("config/{tenant}", (string tenant) => GetCurrentTenant(tenant).Funcs.Clear());
+app.Map("/{tenant:regex(^(?!swagger.*)|^(?!config.*).*$)}/{**path}", async context =>
 {
     var path = context.Request.RouteValues["path"] + "";
     var tenant = GetCurrentTenant(context.Request.RouteValues["tenant"] + "");
@@ -44,7 +44,7 @@ app.Map("/{tenant}/{*path}", async context =>
                 var url = context.Request.GetDisplayUrl();
                 var targetRequestMessage = new HttpRequestMessage();
                 context.Request.Headers.ToList().ForEach(x => targetRequestMessage?.Headers.TryAddWithoutValidation(x.Key, x.Value.ToArray()));
-                targetRequestMessage.RequestUri = new Uri(new Uri(proxyInfo.MapUrl), url[url.IndexOf(path)..]);
+                targetRequestMessage.RequestUri = new Uri(new Uri(proxyInfo.MapUrl), path);
                 targetRequestMessage.Headers.Host = targetRequestMessage.RequestUri.Host;
                 targetRequestMessage.Method = new HttpMethod(context.Request.Method);
                 targetRequestMessage.Content = new StreamContent(context.Request.Body);
@@ -55,7 +55,9 @@ app.Map("/{tenant}/{*path}", async context =>
                     UseDefaultCredentials = string.IsNullOrEmpty(proxyInfo.ProxyLogin),
                     Credentials = new NetworkCredential(proxyInfo.ProxyLogin, proxyInfo.ProxyPassword)
                 };
-                using (var responseMessage = await new HttpClient(new HttpClientHandler() { Proxy = proxy }, true)
+                using (var responseMessage = await new HttpClient(new HttpClientHandler() { Proxy = proxy,
+                    ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                }, true)
                         .SendAsync(targetRequestMessage, HttpCompletionOption.ResponseHeadersRead, context.RequestAborted))
                 {
                     context.Response.StatusCode = (int)responseMessage.StatusCode;
