@@ -27,11 +27,13 @@ app.MapGet("{tenant}/config",(string tenant) => Results.Json(GetCurrentTenant(te
 app.MapPost("config/emu/{tenant}", ([FromBody] MethodInfo value, string tenant) => MapMethod(tenant, value));
 app.MapPost("config/proxy/{tenant}", ([FromBody] ProxyInfo value, string tenant) => MapMethod(tenant, value));
 app.MapDelete("config/{tenant}", (string tenant) => GetCurrentTenant(tenant).Funcs.Clear());
-app.Map("/{tenant:regex(^(?!swagger.*)|^(?!config.*).*$)}/{**path}", async context =>
+app.Map("/{tenant:regex(^(?!swagger).*$)}/{**path}", async context =>
 {
     var path = context.Request.RouteValues["path"] + "";
-    var tenant = GetCurrentTenant(context.Request.RouteValues["tenant"] + "");
-    if (tenant.Funcs.TryGetValue(path + context.Request.Method.ToUpper(), out object method) || tenant.Funcs.TryGetValue(path, out method))
+    var ten = context.Request.RouteValues["tenant"] + "";
+    var tenant = GetCurrentTenant(ten);
+    if (tenant.Funcs.TryGetValue(path + context.Request.Method.ToUpper(), out object method) || tenant.Funcs.TryGetValue(path, out method) || tenant.Funcs.TryGetValue("", out method)
+    || tenant.Funcs.TryGetValue(ten, out method))
     {
         switch (method)
         {
@@ -43,18 +45,36 @@ app.Map("/{tenant:regex(^(?!swagger.*)|^(?!config.*).*$)}/{**path}", async conte
             case ProxyInfo proxyInfo:
                 var url = context.Request.GetDisplayUrl();
                 var targetRequestMessage = new HttpRequestMessage();
-                context.Request.Headers.ToList().ForEach(x => targetRequestMessage?.Headers.TryAddWithoutValidation(x.Key, x.Value.ToArray()));
-                targetRequestMessage.RequestUri = new Uri(new Uri(proxyInfo.MapUrl), path);
+                context.Request.EnableBuffering();
+                //context.Request.Headers.ToList().ForEach(x => targetRequestMessage?.Headers.TryAddWithoutValidation(x.Key, x.Value.ToArray()));
+                //targetRequestMessage?.Headers.TryAddWithoutValidation("X-For", x.Value.ToArray())
+                var uri = new Uri(proxyInfo.MapUrl);
+                targetRequestMessage.RequestUri = new Uri(uri, uri.PathAndQuery+"/"+url[(url.IndexOf(ten) + ten.Length)..].TrimStart('/'));
+                
+                targetRequestMessage.Content = new StreamContent(context.Request.Body);
+
+                foreach (var header in context.Request.Headers)
+                {
+                    if (!targetRequestMessage.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray()) && targetRequestMessage.Content != null)
+                    {
+                        targetRequestMessage.Content?.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
+                    }
+                }
+
                 targetRequestMessage.Headers.Host = targetRequestMessage.RequestUri.Host;
                 targetRequestMessage.Method = new HttpMethod(context.Request.Method);
-                targetRequestMessage.Content = new StreamContent(context.Request.Body);
+
                 var proxy = string.IsNullOrEmpty(proxyInfo.ProxyUrl) ? null : new WebProxy
                 {
                     Address = new Uri(proxyInfo.ProxyUrl),
-                    BypassProxyOnLocal = false,
-                    UseDefaultCredentials = string.IsNullOrEmpty(proxyInfo.ProxyLogin),
-                    Credentials = new NetworkCredential(proxyInfo.ProxyLogin, proxyInfo.ProxyPassword)
+                    //BypassProxyOnLocal = false,
+                    
                 };
+                if (!string.IsNullOrEmpty(proxyInfo.ProxyLogin))
+                {
+                    proxy.UseDefaultCredentials = string.IsNullOrEmpty(proxyInfo.ProxyLogin);
+                    proxy.Credentials = new NetworkCredential(proxyInfo.ProxyLogin, proxyInfo.ProxyPassword);
+                }
                 using (var responseMessage = await new HttpClient(new HttpClientHandler() { Proxy = proxy,
                     ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
                 }, true)
